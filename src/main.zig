@@ -13,6 +13,7 @@ const stdin = &stdin_reader.interface;
 const Builtin = enum {
     exit,
     echo,
+    type,
 };
 
 const Command = struct {
@@ -33,6 +34,8 @@ const Command = struct {
             if (i == 0) {
                 command.exec = input_part;
                 continue;
+            } else if (i == 50) {
+                break; // TODO: implement error handling for too many arguments
             }
 
             command.args[i-1] = input_part;
@@ -89,6 +92,15 @@ pub fn runBuiltinCommand(command: *Command) !void {
                 }
             }
             try stdout.print("\n", .{});
+        },
+        .type => {
+            if (command.argLength > 0 and command.args[0].len > 0) {
+                if (std.meta.stringToEnum(Builtin, command.args[0]) != null) {
+                    try stdout.print("{s} is a shell builtin\n", .{command.args[0]});
+                } else {
+                    try stdout.print("{s}: not found\n", .{command.args[0]});
+                }
+            }
         }
     }
 }
