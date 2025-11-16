@@ -11,7 +11,8 @@ var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
 const Builtin = enum {
-    exit
+    exit,
+    echo,
 };
 
 const Command = struct {
@@ -56,7 +57,7 @@ pub fn main() !void {
 pub fn handleCommand(command: *Command) !void {
     command.builtin = std.meta.stringToEnum(Builtin, command.exec);
     if (command.builtin != null) {
-        try runBuiltinCommand(command);
+        return try runBuiltinCommand(command);
     }
 
     try stderr.print("{s}: command not found\n", .{command.exec});
@@ -77,6 +78,17 @@ pub fn runBuiltinCommand(command: *Command) !void {
             }
 
             std.process.exit(exitValue);
+        },
+        .echo => {
+            var i: u8 = 0;
+            while (i < command.argLength) : (i += 1) {
+                if (i+1 == command.argLength) {
+                    try stdout.print("{s}", .{command.args[i]});
+                } else {
+                    try stdout.print("{s} ", .{command.args[i]});
+                }
+            }
+            try stdout.print("\n", .{});
         }
     }
 }
