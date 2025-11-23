@@ -94,7 +94,10 @@ const Command = struct {
     pub fn run(self: *Command, allocator: std.mem.Allocator) !void {
         switch (self.executable) {
             .builtin => try runBuiltinCommand(allocator, self),
-            .path => return error.TODO,
+            .path => {
+                var child: std.process.Child = .init(self.args.items, allocator);
+                _ = try child.spawnAndWait();
+            }
         }
     }
 
