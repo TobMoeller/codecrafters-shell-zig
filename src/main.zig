@@ -29,6 +29,10 @@ const Executable = union(CommandType) {
     path: []const u8,
 };
 
+const CommandError = error {
+    ExecutableNotFound,
+};
+
 const Command = struct {
     args: std.ArrayList([]const u8),
     executable: Executable,
@@ -49,7 +53,14 @@ const Command = struct {
         }
 
         if (command.args.items.len < 1) return error.NoExecutableProvided;
-        command.executable = try determineExecutable(allocator, command.args.items[0]);
+        command.executable = determineExecutable(allocator, command.args.items[0])
+            catch |err| switch (err) {
+                CommandError.ExecutableNotFound => {
+                    try stderr.print("{s}: command not found\n", .{command.args.items[0]});
+                    return err;
+                },
+                else => return err,
+            };
 
         return command;
     }
@@ -93,7 +104,7 @@ const Command = struct {
             }
         } 
 
-        return error.ExecutableNotFound;
+        return CommandError.ExecutableNotFound;
     }
 
     pub fn run(self: *Command, allocator: std.mem.Allocator) !void {
@@ -163,7 +174,7 @@ pub fn main() !void {
         const arena = arenaAllocator.allocator();
         try stdout.print("$ ", .{});
 
-        var command: Command = try Command.parseInput(arena);
+        var command: Command = Command.parseInput(arena) catch continue;
         try command.run(arena);
     }
 }
