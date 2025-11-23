@@ -84,8 +84,13 @@ const Command = struct {
 
         while (pathIterator.next()) |dirPath| {
             const filePath = try std.fs.path.join(allocator, &.{dirPath, command});
-            std.fs.accessAbsolute(filePath, .{.mode = .read_only}) catch continue;
-            return filePath;
+            var file = std.fs.openFileAbsolute(filePath, .{.mode = .read_only}) catch continue;
+            defer file.close();
+
+            const fileMode = file.mode() catch continue;
+            if (fileMode & std.posix.S.IXUSR != 0) { // TODO handle IXGRP / IXOTH and windows?
+                return filePath;
+            }
         } 
 
         return error.ExecutableNotFound;
