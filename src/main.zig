@@ -6,7 +6,7 @@ const stdout = &stdout_writer.interface;
 var stderr_writer = std.fs.File.stderr().writerStreaming(&.{});
 const stderr = &stderr_writer.interface;
 
-var stdin_buffer: [10*1024]u8 = undefined;
+var stdin_buffer: [10*1024]u8 = undefined; // TODO dynamically allocate?
 var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
@@ -14,35 +14,134 @@ const Builtin = enum {
     exit,
     echo,
     type,
+    pub fn fromString(string: []const u8) ?Builtin {
+        return std.meta.stringToEnum(Builtin, string);
+    }
+};
+
+const CommandType = enum {
+    builtin,
+    path,
+};
+
+const Executable = union(CommandType) {
+    builtin: Builtin,
+    path: []const u8,
 };
 
 const Command = struct {
-    exec: []const u8,
-    args: [50][]const u8,
-    argLength: u8 = 0,
-    builtin: ?Builtin = null,
+    args: std.ArrayList([]const u8),
+    executable: Executable,
 
-    pub fn createFromInput(input: []const u8) !Command {
-        var i: u8 = 0;
+    pub fn parseInput(allocator: std.mem.Allocator) !Command {
         var command: Command = .{
-            .exec = undefined,
-            .args = undefined
+            .args = .empty,
+            .executable = undefined,
         };
 
-        var splitIterator = std.mem.splitScalar(u8, input, ' ');
-        while (splitIterator.next()) |input_part| : (i += 1) {
-            if (i == 0) {
-                command.exec = input_part;
-                continue;
-            } else if (i == 50) {
-                break; // TODO: implement error handling for too many arguments
-            }
+        const input = try stdin.takeDelimiter('\n') orelse "";
 
-            command.args[i-1] = input_part;
-            command.argLength = i;
+        var splitIterator = std.mem.splitScalar(u8, input, ' ');
+        while (splitIterator.next()) |arg| {
+            if (arg.len > 0) {
+                try command.cloneAndAppendArg(allocator, arg);
+            }
         }
 
+        if (command.args.items.len < 1) return error.NoExecutableProvided;
+        command.executable = try determineExecutable(allocator, command.args.items[0]);
+
         return command;
+    }
+
+    pub fn cloneAndAppendArg(self: *Command, allocator: std.mem.Allocator, arg: []const u8) !void {
+        const argCopy = try allocator.dupe(u8, arg);
+        try self.args.append(allocator, argCopy);
+    }
+
+    pub fn deinit(self: *Command, allocator: std.mem.Allocator) !void {
+        self.args.deinit(allocator);
+    }
+
+    pub fn determineExecutable(allocator: std.mem.Allocator, command: []const u8) !Executable {
+        if (command.len < 1) return error.NoExecutableProvided;
+
+        const maybeBuiltin = Builtin.fromString(command);
+        if (maybeBuiltin != null) {
+            return .{ .builtin = maybeBuiltin.? };
+        } else {
+            const path = try findExecutableInPath(allocator, command);
+            return .{ .path = path };
+        }
+    }
+
+    pub fn findExecutableInPath(allocator: std.mem.Allocator, command: []const u8) ![]const u8 {
+        var env = try std.process.getEnvMap(allocator);
+        defer env.deinit();
+
+        const pathVariable = env.get("PATH") orelse return error.UnableToRetrievePath;
+        var pathIterator = std.mem.splitScalar(u8, pathVariable, ':');
+
+        while (pathIterator.next()) |dirPath| {
+            const filePath = try std.fs.path.join(allocator, &.{dirPath, command});
+            std.fs.accessAbsolute(filePath, .{.mode = .read_only}) catch continue;
+            return filePath;
+        } 
+
+        return error.ExecutableNotFound;
+    }
+
+    pub fn run(self: *Command, allocator: std.mem.Allocator) !void {
+        switch (self.executable) {
+            .builtin => try runBuiltinCommand(allocator, self),
+            .path => return error.TODO,
+        }
+    }
+
+    pub fn runBuiltinCommand(allocator: std.mem.Allocator, command: *Command) !void {
+        switch (command.executable.builtin) {
+            .exit => {
+                var exitValue: u8 = 0;
+
+                if (command.args.items.len > 1 and command.args.items[1].len > 0) {
+                    const providedExitValue: u8 = std.fmt.parseInt(u8, command.args.items[1], 10) 
+                        catch return std.process.exit(exitValue);
+
+                    if (providedExitValue <= 255) {
+                        exitValue = providedExitValue;
+                    }
+                }
+
+                std.process.exit(exitValue);
+            },
+            .echo => {
+                var i: u8 = 1;
+                while (i < command.args.items.len) : (i += 1) {
+                    if (i+1 == command.args.items.len) {
+                        try stdout.print("{s}", .{command.args.items[i]});
+                    } else {
+                        try stdout.print("{s} ", .{command.args.items[i]});
+                    }
+                }
+                try stdout.print("\n", .{});
+            },
+            .type => {
+                if (command.args.items.len > 0 and command.args.items[1].len > 0) {
+                    const commandArg = command.args.items[1];
+                    const executable: ?Executable = determineExecutable(allocator, commandArg) catch null;
+                    if (executable == null) {
+                        try stderr.print("{s}: not found\n", .{commandArg});
+                        return;
+                    }
+                    switch (executable.?) {
+                        .builtin => try stdout.print("{s} is a shell builtin\n", .{commandArg}),
+                        .path => try stdout.print("{s} is {s}\n", .{commandArg, executable.?.path})
+                    }
+                } else {
+                    try stderr.print("No Command provided\n", .{});
+                }
+            }
+        }
     }
 };
 
@@ -51,110 +150,12 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     while (true) {
+        var arenaAllocator: std.heap.ArenaAllocator = .init(allocator);
+        defer arenaAllocator.deinit();
+        const arena = arenaAllocator.allocator();
         try stdout.print("$ ", .{});
-        const input = try stdin.takeDelimiter('\n') orelse "";
 
-        var command: Command = try Command.createFromInput(input);
-        try handleCommand(allocator, &command);
+        var command: Command = try Command.parseInput(arena);
+        try command.run(arena);
     }
-}
-
-pub fn handleCommand(allocator: std.mem.Allocator, command: *Command) !void {
-    command.builtin = std.meta.stringToEnum(Builtin, command.exec);
-    if (command.builtin != null) {
-        return try runBuiltinCommand(allocator, command);
-    }
-
-    try stderr.print("{s}: command not found\n", .{command.exec});
-}
-
-pub fn runBuiltinCommand(allocator: std.mem.Allocator, command: *Command) !void {
-    switch (command.builtin.?) {
-        .exit => {
-            var exitValue: u8 = 0;
-
-            if (command.argLength > 0 and command.args[0].len > 0) {
-                const providedExitValue: u8 = std.fmt.parseInt(u8, command.args[0], 10) 
-                    catch std.process.exit(exitValue);
-
-                if (providedExitValue <= 255) {
-                    exitValue = providedExitValue;
-                }
-            }
-
-            std.process.exit(exitValue);
-        },
-        .echo => {
-            var i: u8 = 0;
-            while (i < command.argLength) : (i += 1) {
-                if (i+1 == command.argLength) {
-                    try stdout.print("{s}", .{command.args[i]});
-                } else {
-                    try stdout.print("{s} ", .{command.args[i]});
-                }
-            }
-            try stdout.print("\n", .{});
-        },
-        .type => {
-            if (command.argLength > 0 and command.args[0].len > 0) {
-                if (std.meta.stringToEnum(Builtin, command.args[0]) != null) {
-                    try stdout.print("{s} is a shell builtin\n", .{command.args[0]});
-                } else {
-                    try typeFindCommandInPath(allocator, command);
-                }
-            }
-        }
-    }
-}
-
-// TODO refactor naming and structure (add command path to command struct, create find command method)
-pub fn typeFindCommandInPath(allocator: std.mem.Allocator, command: *Command) !void {
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-
-    const pathVariable = env.get("PATH") orelse return try typeNotFound(command);
-    var pathIterator = std.mem.splitScalar(u8, pathVariable, ':');
-
-    while (pathIterator.next()) |path| {
-        if (try typeFindCommandInDir(allocator, command, path)) return;
-    } 
-
-    try typeNotFound(command);
-}
-
-pub fn typeFindCommandInDir(allocator: std.mem.Allocator, command: *Command, path: []const u8) !bool {
-    var dir = std.fs.openDirAbsolute(path, .{.access_sub_paths = false, .iterate = true}) catch return false;
-    defer dir.close();
-
-    var dirWalker = try dir.walk(allocator);
-
-    while (true) {
-        const maybe_entry = dirWalker.next() catch continue;
-        const entry = maybe_entry orelse break;
-
-        if (entry.kind == .file and std.mem.eql(u8, command.args[0], entry.basename)) { // TODO handle symlinks
-
-            var file = dir.openFile(entry.basename, .{.mode = .read_only}) catch continue;
-            const fileStat = file.stat() catch continue;
-
-            if (fileStat.mode & std.posix.S.IXUSR != 0) { // TODO handle IXGRP / IXOTH and windows?
-                const absolutePath = try std.fs.path.join(allocator, &.{path, command.args[0]});
-                try stderr.print("{s} is {s}\n", .{command.args[0], absolutePath});
-
-                return true;
-            }
-
-            // try stdout.print("{s} - {b} & {b} = {b}\n", .{entry.basename, fileStat.mode, std.posix.S.IXUSR, fileStat.mode & std.posix.S.IXUSR});
-        }
-    }
-
-    return false;
-}
-
-pub fn typeNotFound(command: *Command) !void {
-    try stderr.print("{s}: not found\n", .{command.args[0]});
-}
-
-pub fn exit(exitValue: u8) void {
-    std.process.exit(exitValue);
 }
