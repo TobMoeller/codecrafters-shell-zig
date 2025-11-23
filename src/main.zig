@@ -14,6 +14,7 @@ const Builtin = enum {
     exit,
     echo,
     type,
+    pwd,
     pub fn fromString(string: []const u8) ?Builtin {
         return std.meta.stringToEnum(Builtin, string);
     }
@@ -159,7 +160,11 @@ const Command = struct {
                 } else {
                     try stderr.print("No Command provided\n", .{});
                 }
-            }
+            },
+            .pwd => {
+                const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+                try stdout.print("{s}\n", .{cwd});
+            },
         }
     }
 };
