@@ -89,10 +89,8 @@ const Command = struct {
     }
 
     pub fn findExecutableInPath(allocator: std.mem.Allocator, command: []const u8) ![]const u8 {
-        var env = try std.process.getEnvMap(allocator);
-        defer env.deinit();
-
-        const pathVariable = env.get("PATH") orelse return error.UnableToRetrievePath;
+        const pathVariable = std.process.getEnvVarOwned(allocator, "PATH") catch return error.UnableToRetrievePath;
+        defer allocator.free(pathVariable);
         var pathIterator = std.mem.splitScalar(u8, pathVariable, ':');
 
         while (pathIterator.next()) |dirPath| {
@@ -167,17 +165,30 @@ const Command = struct {
                 try stdout.print("{s}\n", .{cwd});
             },
             .cd => {
-                if (command.args.items.len > 1 and command.args.items[1].len > 0) {
-                    var dir = std.fs.cwd().openDir(command.args.items[1], .{})
-                        catch {
-                            try stderr.print("cd: {s}: No such file or directory\n", .{command.args.items[1]});
-                            return;
-                        };
-                    defer dir.close();
-                    try dir.setAsCwd();
+                var destination: []const u8 = undefined;
+
+                if (command.args.items.len <= 1 or std.mem.eql(u8, command.args.items[1], "~")) {
+                    destination = std.process.getEnvVarOwned(allocator, "HOME") catch {
+                        try stderr.print("No HOME defined", .{});
+                        return;
+                    };
+
+                } else if (command.args.items.len > 1 and command.args.items[1].len > 0) {
+                    destination = command.args.items[1];
+
                 } else {
+
                     try stderr.print("No destination provided\n", .{});
+                    return;
                 }
+
+                var dir = std.fs.cwd().openDir(destination, .{})
+                    catch {
+                        try stderr.print("cd: {s}: No such file or directory\n", .{command.args.items[1]});
+                        return;
+                    };
+                defer dir.close();
+                try dir.setAsCwd();
             },
         }
     }
