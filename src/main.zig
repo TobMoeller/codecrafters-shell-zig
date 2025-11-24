@@ -15,6 +15,7 @@ const Builtin = enum {
     echo,
     type,
     pwd,
+    cd,
     pub fn fromString(string: []const u8) ?Builtin {
         return std.meta.stringToEnum(Builtin, string);
     }
@@ -164,6 +165,19 @@ const Command = struct {
             .pwd => {
                 const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
                 try stdout.print("{s}\n", .{cwd});
+            },
+            .cd => {
+                if (command.args.items.len > 1 and command.args.items[1].len > 0) {
+                    var dir = std.fs.cwd().openDir(command.args.items[1], .{})
+                        catch {
+                            try stderr.print("cd: {s}: No such file or directory\n", .{command.args.items[1]});
+                            return;
+                        };
+                    defer dir.close();
+                    try dir.setAsCwd();
+                } else {
+                    try stderr.print("No destination provided\n", .{});
+                }
             },
         }
     }
