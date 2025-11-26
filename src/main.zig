@@ -1,4 +1,5 @@
 const std = @import("std");
+const lex = @import("lexer.zig");
 
 var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 const stdout = &stdout_writer.interface;
@@ -37,28 +38,41 @@ const CommandError = error {
 
 const Command = struct {
     args: std.ArrayList([]const u8),
+    tokens: std.ArrayList(lex.Token),
     executable: Executable,
 
     pub fn parseInput(allocator: std.mem.Allocator) !Command {
         var command: Command = .{
             .args = .empty,
+            .tokens = .empty,
             .executable = undefined,
         };
 
         const input = try stdin.takeDelimiter('\n') orelse "";
 
-        var splitIterator = std.mem.splitScalar(u8, input, ' ');
-        while (splitIterator.next()) |arg| {
-            if (arg.len > 0) {
-                try command.cloneAndAppendArg(allocator, arg);
+        // var splitIterator = std.mem.splitScalar(u8, input, ' ');
+        // while (splitIterator.next()) |arg| {
+        //     if (arg.len > 0) {
+        //         try command.cloneAndAppendArg(allocator, arg);
+        //     }
+        // }
+
+        var lexer: lex.Lexer = .init(input);
+
+        while (true) {
+            const token = try lexer.next(allocator);
+            if (token.kind == .eof) {
+                break;
             }
+            try command.tokens.append(allocator, token);
+            try command.args.append(allocator, token.lexeme);
         }
 
-        if (command.args.items.len < 1) return error.NoExecutableProvided;
-        command.executable = determineExecutable(allocator, command.args.items[0])
+        if (command.tokens.items.len < 1) return error.NoExecutableProvided;
+        command.executable = determineExecutable(allocator, command.tokens.items[0].lexeme)
             catch |err| switch (err) {
                 CommandError.ExecutableNotFound => {
-                    try stderr.print("{s}: command not found\n", .{command.args.items[0]});
+                    try stderr.print("{s}: command not found\n", .{command.tokens.items[0].lexeme});
                     return err;
                 },
                 else => return err,
@@ -73,7 +87,7 @@ const Command = struct {
     }
 
     pub fn deinit(self: *Command, allocator: std.mem.Allocator) !void {
-        self.args.deinit(allocator);
+        self.tokens.deinit(allocator);
     }
 
     pub fn determineExecutable(allocator: std.mem.Allocator, command: []const u8) !Executable {
@@ -111,6 +125,7 @@ const Command = struct {
         switch (self.executable) {
             .builtin => try runBuiltinCommand(allocator, self),
             .path => {
+                // TODO generate args from tokens
                 var child: std.process.Child = .init(self.args.items, allocator);
                 _ = try child.spawnAndWait();
             }
@@ -122,8 +137,8 @@ const Command = struct {
             .exit => {
                 var exitValue: u8 = 0;
 
-                if (command.args.items.len > 1 and command.args.items[1].len > 0) {
-                    const providedExitValue: u8 = std.fmt.parseInt(u8, command.args.items[1], 10) 
+                if (command.tokens.items.len > 1 and command.tokens.items[1].lexeme.len > 0) {
+                    const providedExitValue: u8 = std.fmt.parseInt(u8, command.tokens.items[1].lexeme, 10) 
                         catch return std.process.exit(exitValue);
 
                     if (providedExitValue <= 255) {
@@ -135,18 +150,18 @@ const Command = struct {
             },
             .echo => {
                 var i: u8 = 1;
-                while (i < command.args.items.len) : (i += 1) {
-                    if (i+1 == command.args.items.len) {
-                        try stdout.print("{s}", .{command.args.items[i]});
+                while (i < command.tokens.items.len) : (i += 1) {
+                    if (i+1 == command.tokens.items.len) {
+                        try stdout.print("{s}", .{command.tokens.items[i].lexeme});
                     } else {
-                        try stdout.print("{s} ", .{command.args.items[i]});
+                        try stdout.print("{s} ", .{command.tokens.items[i].lexeme});
                     }
                 }
                 try stdout.print("\n", .{});
             },
             .type => {
-                if (command.args.items.len > 0 and command.args.items[1].len > 0) {
-                    const commandArg = command.args.items[1];
+                if (command.tokens.items.len > 0 and command.tokens.items[1].lexeme.len > 0) {
+                    const commandArg = command.tokens.items[1].lexeme;
                     const executable: ?Executable = determineExecutable(allocator, commandArg) catch null;
                     if (executable == null) {
                         try stderr.print("{s}: not found\n", .{commandArg});
@@ -167,14 +182,14 @@ const Command = struct {
             .cd => {
                 var destination: []const u8 = undefined;
 
-                if (command.args.items.len <= 1 or std.mem.eql(u8, command.args.items[1], "~")) {
+                if (command.tokens.items.len <= 1 or std.mem.eql(u8, command.tokens.items[1].lexeme, "~")) {
                     destination = std.process.getEnvVarOwned(allocator, "HOME") catch {
                         try stderr.print("No HOME defined", .{});
                         return;
                     };
 
-                } else if (command.args.items.len > 1 and command.args.items[1].len > 0) {
-                    destination = command.args.items[1];
+                } else if (command.tokens.items.len > 1 and command.tokens.items[1].lexeme.len > 0) {
+                    destination = command.tokens.items[1].lexeme;
 
                 } else {
 
@@ -184,7 +199,7 @@ const Command = struct {
 
                 var dir = std.fs.cwd().openDir(destination, .{})
                     catch {
-                        try stderr.print("cd: {s}: No such file or directory\n", .{command.args.items[1]});
+                        try stderr.print("cd: {s}: No such file or directory\n", .{command.tokens.items[1].lexeme});
                         return;
                     };
                 defer dir.close();
