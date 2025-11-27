@@ -14,6 +14,7 @@ const State = enum {
     normal,
     inSingleQuotes,
     inDoubleQuotes,
+    escape,
 };
 
 pub const Lexer = struct {
@@ -50,6 +51,7 @@ pub const Lexer = struct {
                             continue;
                         }
                     },
+                    '\\' => self.state = .escape,
                     else => {
                         try self.lexemeBuffer.append(allocator, c);
                     }
@@ -69,7 +71,11 @@ pub const Lexer = struct {
                     else => {
                         try self.lexemeBuffer.append(allocator, c);
                     }
-                }
+                },
+                .escape => {
+                    try self.lexemeBuffer.append(allocator, c);
+                    self.state = .normal;
+                },
             }
         }
 
