@@ -13,6 +13,7 @@ pub const Token = struct {
 const State = enum {
     normal,
     inSingleQuotes,
+    inDoubleQuotes,
 };
 
 pub const Lexer = struct {
@@ -36,8 +37,11 @@ pub const Lexer = struct {
 
             switch (self.state) {
                 .normal => switch (c) {
-                    '\'', '"' => {
+                    '\'' => {
                         self.state = .inSingleQuotes;
+                    },
+                    '"' => {
+                        self.state = .inDoubleQuotes;
                     },
                     ' ', '\t', '\n' => {
                         if (self.lexemeBuffer.items.len > 0) {
@@ -51,7 +55,15 @@ pub const Lexer = struct {
                     }
                 },
                 .inSingleQuotes => switch (c) {
-                    '\'', '"' => {
+                    '\'' => {
+                        self.state = .normal;
+                    },
+                    else => {
+                        try self.lexemeBuffer.append(allocator, c);
+                    }
+                },
+                .inDoubleQuotes => switch (c) {
+                    '"' => {
                         self.state = .normal;
                     },
                     else => {
