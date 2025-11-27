@@ -36,7 +36,7 @@ pub const Lexer = struct {
 
             switch (self.state) {
                 .normal => switch (c) {
-                    '\'' => {
+                    '\'', '"' => {
                         self.state = .inSingleQuotes;
                     },
                     ' ', '\t', '\n' => {
@@ -51,7 +51,7 @@ pub const Lexer = struct {
                     }
                 },
                 .inSingleQuotes => switch (c) {
-                    '\'' => {
+                    '\'', '"' => {
                         self.state = .normal;
                     },
                     else => {
