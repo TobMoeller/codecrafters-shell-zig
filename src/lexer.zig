@@ -68,6 +68,20 @@ pub const Lexer = struct {
                     '"' => {
                         self.state = .normal;
                     },
+                    '\\' => {
+                        if ((self.index + 1) < self.input.len) {
+                            const c2 = self.input[self.index + 1];
+                            switch (c2) {
+                                '"', '\\' => {
+                                    try self.lexemeBuffer.append(allocator, c2);
+                                    self.index += 1;
+                                },
+                                else => {
+                                    try self.lexemeBuffer.append(allocator, c);
+                                }
+                            }
+                        }
+                    },
                     else => {
                         try self.lexemeBuffer.append(allocator, c);
                     }
