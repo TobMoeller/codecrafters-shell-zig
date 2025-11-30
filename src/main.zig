@@ -28,6 +28,9 @@ pub fn main() !void {
         defer arenaAllocator.deinit();
         const arena = arenaAllocator.allocator();
 
+        try buildCompletionCandidates(arena);
+        defer completionCandidates.clearAndFree(arena);
+
         const line = c.readline("$ ");
         defer std.c.free(line);
 
@@ -42,6 +45,8 @@ pub fn main() !void {
         try command.run(arena);
     }
 }
+
+var completionCandidates: std.ArrayList([]const u8) = .empty;
 
 fn completion(text: [*c]const u8, start: c_int, stop: c_int) callconv(.c) [*c][*c]u8 {
     _ = stop;
@@ -65,16 +70,44 @@ fn commandGenerator(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
         localState.optionIndex = 0;
     }
 
-    while (localState.optionIndex < cmd.Builtin.names.len) {
+    while (localState.optionIndex < completionCandidates.items.len) {
         const index = localState.optionIndex;
         localState.optionIndex += 1;
 
-        if (std.mem.startsWith(u8, cmd.Builtin.names[index], command)) {
-            const dup =  std.heap.c_allocator.dupeZ(u8, cmd.Builtin.names[index]) catch null;
+        if (std.mem.startsWith(u8, completionCandidates.items[index], command)) {
+            const dup =  std.heap.c_allocator.dupeZ(u8, completionCandidates.items[index]) catch null;
             return dup.?.ptr;
         }
     }
 
     return null;
+}
+
+fn buildCompletionCandidates(allocator: std.mem.Allocator) !void {
+    inline for (@typeInfo(cmd.Builtin).@"enum".fields) |builtin| {
+        try completionCandidates.append(allocator, builtin.name);
+    }
+
+    const pathVariable = std.process.getEnvVarOwned(allocator, "PATH") catch return error.UnableToRetrievePath;
+    defer allocator.free(pathVariable);
+    var pathIterator = std.mem.splitScalar(u8, pathVariable, ':');
+
+    while (pathIterator.next()) |dirPath| {
+        var dir = std.fs.openDirAbsolute(dirPath, .{.iterate = true}) catch continue;
+        defer dir.close();
+
+        var iterator = dir.iterate();
+
+        while (true) {
+            const maybeEntry = iterator.next() catch break;
+            const entry = maybeEntry orelse break;
+            if (entry.kind != .file) continue;
+
+            const fileStat = dir.statFile(entry.name) catch continue;
+            if (fileStat.mode & std.posix.S.IXUSR != 0) { // TODO handle IXGRP / IXOTH and windows?
+                try completionCandidates.append(allocator, try allocator.dupe(u8, entry.name));
+            }
+        }
+    } 
 }
 
