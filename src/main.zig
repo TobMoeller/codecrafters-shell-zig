@@ -46,6 +46,7 @@ pub fn main() !void {
     }
 }
 
+// completion somewhat following the example from https://tiswww.case.edu/php/chet/readline/readline.html#Custom-Completers 
 var completionCandidates: std.ArrayList([]const u8) = .empty;
 
 fn completion(text: [*c]const u8, start: c_int, stop: c_int) callconv(.c) [*c][*c]u8 {
