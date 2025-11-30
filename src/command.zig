@@ -11,6 +11,16 @@ pub const Builtin = enum {
     pub fn fromString(string: []const u8) ?Builtin {
         return std.meta.stringToEnum(Builtin, string);
     }
+    pub const names = namesBlock: {
+        const enumInfo = @typeInfo(Builtin).@"enum";
+        var arr: [enumInfo.fields.len][]const u8 = undefined;
+
+        for (enumInfo.fields, 0..) |field, i| {
+            arr[i] = field.name;
+        }
+
+        break :namesBlock arr;
+    };
 };
 
 pub const CommandType = enum {
