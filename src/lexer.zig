@@ -76,6 +76,7 @@ pub const Lexer = struct {
                                     try self.lexemeBuffer.append(allocator, c2);
                                     self.index += 1;
                                 },
+                                // TODO add handling other special characters ($, `, newline) - https://www.gnu.org/software/bash/manual/bash.html#Double-Quotes
                                 else => {
                                     try self.lexemeBuffer.append(allocator, c);
                                 }
